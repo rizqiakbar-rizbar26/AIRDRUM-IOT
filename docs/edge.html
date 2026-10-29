@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AirDrum · Edge</title>
+<style>
+  body{margin:0;padding:12px;font:16px system-ui,sans-serif;background:#111;color:#eee;transition:background .12s}
+  label{display:block;margin:8px 0 2px;font-size:13px;color:#aaa}
+  input,select,button{width:100%;padding:10px;font-size:16px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;box-sizing:border-box}
+  button{background:#2563eb;border:0;margin-top:10px}
+  #ind{display:inline-block;width:12px;height:12px;border-radius:50%;background:#f87171;margin-right:6px}
+  #ind.on{background:#4ade80} #st{margin:10px 0;font-size:14px} pre{font-size:12px;white-space:pre-wrap}
+  .tepat{background:#14532d!important}.salah{background:#7f1d1d!important}.beat{background:#1e293b!important}
+</style>
+</head>
+<body>
+<h2><span id="ind"></span>AirDrum · Edge</h2>
+<label>Peran</label>
+<select id="role"><option value="left">Stik kiri</option><option value="right">Stik kanan</option></select>
+<label>PROJECT_ID</label><input id="pid">
+<label>URL broker (WSS)</label><input id="url">
+<label>Klasifikasi drum</label>
+<select id="clf"><option value="rule">Aturan sumbu (bawaan)</option><option value="knn">k-NN (butuh kalibrasi)</option></select>
+<button id="go">Mulai</button>
+<div id="st">Belum dimulai.</div>
+<details><summary>Mode debug</summary>
+  <label>HIT_ACC: <b id="hv"></b> m/s²</label>
+  <input type="range" id="hs" min="4" max="30" step="0.5">
+  <pre id="dbg"></pre>
+</details>
+<details><summary>Kalibrasi k-NN</summary>
+  <label>Kelas</label><select id="cl"><option value="snare">snare (ayun ke bawah)</option><option value="hihat">hihat (ke samping)</option><option value="tom">tom (memutar)</option></select>
+  <button id="rec">Rekam 5 ayunan</button>
+</details>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/processing.js"></script>
+<script src="js/audio.js"></script>
+<script>
+'use strict';
+const P = AirDrumProc, C = AirDrumCfg, A = AirDrumAudio, $ = (i) => document.getElementById(i);
+const S = { det: P.createHitDetector(), samples: [], seq: 0, hits: [], knn: new P.KNN(), rec: 0, mag: 0,
+  ctrl: { mode: 'free', running: false, bpm: 90, pattern: 'RLRL', tolerance_ms: 80 }, t0: 0, gen: 0, up: false, ok: false };
+const role = () => $('role').value;
+const msg = (t, k) => { $('st').textContent = t; $('st').className = k || ''; };
+
+// pengaturan disimpan di localStorage (hanya PROJECT_ID, URL broker, peran, HIT_ACC)
+function muat() {
+  let s = {}; try { s = JSON.parse(localStorage.getItem('airdrum_edge') || '{}'); } catch (e) {}
+  $('pid').value = s.pid || C.DEFAULT_PROJECT_ID; $('url').value = s.url || C.DEFAULT_BROKER;
+  $('role').value = s.role || 'left'; S.det.cfg.HIT_ACC = s.hit || 12;
+  $('hs').value = S.det.cfg.HIT_ACC; $('hv').textContent = S.det.cfg.HIT_ACC;
+}
+function simpan() {
+  try { localStorage.setItem('airdrum_edge', JSON.stringify({ pid: $('pid').value, url: $('url').value, role: role(), hit: S.det.cfg.HIT_ACC })); } catch (e) {}
+}
+$('hs').oninput = () => { S.det.cfg.HIT_ACC = +$('hs').value; $('hv').textContent = $('hs').value; simpan(); };
+$('rec').onclick = () => { S.rec = 5; msg('Ayunkan stik 5x untuk kelas ' + $('cl').value); };
+
+// ---- Wake Lock: layar tetap menyala, diaktifkan ulang saat halaman kembali terlihat ----
+async function kunci() { try { S.wl = await navigator.wakeLock.request('screen'); } catch (e) {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.started) kunci(); });
+
+// ---- Tombol Mulai: izin sensor harus dari tap pengguna ----
+$('go').onclick = async () => {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      if (await DeviceMotionEvent.requestPermission() !== 'granted') return msg('Izin sensor ditolak. Lihat README: Troubleshooting iOS.', 'bad');
+    }
+  } catch (e) { return msg('Izin sensor gagal: ' + e.message, 'bad'); }
+  S.ac = S.ac || new (window.AudioContext || window.webkitAudioContext)(); S.ac.resume(); // unlock audio
+  S.started = true; await kunci(); simpan(); sambung();
+  window.removeEventListener('devicemotion', onMotion); window.addEventListener('devicemotion', onMotion);
+  msg('Sensor aktif. Ayunkan stik.', 'ok');
+};
+
+// ---- Sensor: acceleration (tanpa gravitasi), cadangan accelerationIncludingGravity ----
+function onMotion(e) {
+  const t = Date.now(), r = e.rotationRate;
+  const a = e.acceleration && e.acceleration.x != null ? e.acceleration : e.accelerationIncludingGravity;
+  if (!a || !r) return;
+  S.ok = true; S.mag = P.magnitude(a.x, a.y, a.z);
+  S.samples.push({ t, alpha: r.alpha || 0, beta: r.beta || 0, gamma: r.gamma || 0 });
+  while (S.samples.length && S.samples[0].t < t - 600) S.samples.shift();
+  const h = S.det.push(t, S.mag);
+  if (h) onHit(h);
+  $('dbg').textContent = 'magnitude: ' + S.mag.toFixed(1) + '\nambang: ' + S.det.cfg.HIT_ACC + '\nrotasi a/b/g: ' + [r.alpha, r.beta, r.gamma].map((v) => (v || 0).toFixed(0)).join(' / ') + '\nsensor OK: ' + S.ok + '\nmode: ' + S.ctrl.mode;
+}
+
+function onHit(h) {
+  const f = P.rotFeatures(P.windowBefore(S.samples, h.t, 200), h.peak_acc);
+  if (S.rec > 0) { S.knn.add($('cl').value, f); S.rec--; return msg(S.rec ? 'Sisa rekam: ' + S.rec : 'Kalibrasi kelas selesai (total ' + S.knn.size() + ' data)', 'ok'); }
+  const drum = $('clf').value === 'knn' && S.knn.size() >= 3 ? S.knn.predict(f, 3) : P.classifyRule(f);
+  const vel = P.velocityFromPeak(h.peak_acc, S.det.cfg);
+  A.playDrum(S.ac, drum, vel); // suara lokal, agar tidak terasa lag
+  S.hits.push(h.t); S.hits = S.hits.slice(-4);
+  const train = S.ctrl.mode === 'train' && S.ctrl.running;
+  S.seq++;
+  pub('edge/' + role() + '/hit', { device_id: role(), sequence: S.seq, drum, velocity: vel, peak_acc: +h.peak_acc.toFixed(2),
+    delta_ms: train ? Math.round(P.deltaToBeat(h.t, S.t0, S.ctrl.bpm)) : null,
+    beat_index: train ? P.beatIndex(h.t, S.t0, S.ctrl.bpm) : null, // tambahan: dipakai dashboard untuk cek tangan
+    bpm_est: P.estimateBpm(S.hits), sent_at_ms: Math.round(h.t) }, 0);
+}
+
+// ---- MQTT ----
+const base = () => C.base($('pid').value);
+function pub(sub, obj, qos, retain) { if (S.cli && S.up) S.cli.publish(base() + '/' + sub, JSON.stringify(obj), { qos, retain: !!retain }); }
+function status(state) { pub('edge/' + role() + '/status', { device_id: role(), state, sensors_ok: S.ok, mode: S.ctrl.mode, bpm: S.ctrl.bpm }, 1, true); }
+
+function sambung() {
+  if (S.cli) S.cli.end(true);
+  const b = base(), r = role();
+  S.cli = mqtt.connect($('url').value, { clientId: 'airdrum_' + r + '_' + Math.random().toString(16).slice(2, 8), reconnectPeriod: 2000,
+    will: { topic: b + '/edge/' + r + '/status', payload: JSON.stringify({ device_id: r, state: 'offline' }), qos: 1, retain: true } });
+  S.cli.on('connect', () => { S.up = true; $('ind').className = 'on';
+    S.cli.subscribe([b + '/control', b + '/feedback/' + r, b + '/rtt/ping'], { qos: 1 }); status('online'); });
+  S.cli.on('close', () => { S.up = false; $('ind').className = ''; });
+  S.cli.on('error', (e) => msg('MQTT error: ' + e.message, 'bad'));
+  S.cli.on('message', (topik, buf) => {
+    let m; try { m = JSON.parse(buf.toString()); } catch (e) { return; }
+    if (topik.endsWith('/control')) terimaControl(m);
+    else if (topik.endsWith('/rtt/ping')) pub('rtt/pong/' + r, { ping_id: m.id, t_ping: m.t, device_id: r }, 0); // balas ping untuk RTT
+    else terimaFeedback(m);
+  });
+}
+
+// ---- Control dari cloud: benar-benar mengubah perilaku edge (mode, BPM, metronom) ----
+function terimaControl(m) {
+  if (S.lastSeq != null && m.seq != null && m.seq < S.lastSeq) return; // abaikan control lama
+  S.lastSeq = m.seq; S.ctrl = Object.assign({}, S.ctrl, m);
+  S.t0 = Date.now(); S.hits = [];  // ketukan 0 = saat control diterima
+  metronom(); status('online');
+  msg('Control: ' + S.ctrl.mode + ', ' + S.ctrl.bpm + ' BPM, ' + (S.ctrl.running ? 'jalan' : 'berhenti'), 'ok');
+}
+function metronom() {
+  const gen = ++S.gen; clearTimeout(S.mt);
+  if (!(S.ctrl.running && S.ctrl.mode === 'train')) return;
+  let n = 0;
+  const loop = () => {
+    if (gen !== S.gen) return;
+    A.click(S.ac, n % 4 === 0); kedip('beat', 80);
+    n++; S.mt = setTimeout(loop, Math.max(0, S.t0 + n * P.beatMs(S.ctrl.bpm) - Date.now()));
+  };
+  loop();
+}
+function kedip(kelas, ms) { document.body.classList.add(kelas); setTimeout(() => document.body.classList.remove(kelas), ms); }
+function terimaFeedback(m) { // warna layar + bunyi (iOS Safari tidak mendukung getar)
+  const ok = m.result === 'TEPAT';
+  kedip(ok ? 'tepat' : 'salah', 300);
+  A.click(S.ac, ok);
+  msg(m.result + (m.delta_ms != null ? ' (' + m.delta_ms + ' ms)' : '') + ' · skor ' + m.score + ' · ' + (m.tip || ''), ok ? 'ok' : 'bad');
+}
+muat();
+</script>
+</body>
+</html>

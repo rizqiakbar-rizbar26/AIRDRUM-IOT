@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirDrum · Dashboard</title>
+<style>
+  :root{color-scheme:dark;--bg:#111;--card:#1b1b1f;--bd:#333;--tx:#eee;--mu:#9ca3af;--ok:#4ade80;--bad:#f87171;--ac:#2563eb}
+  *{box-sizing:border-box}
+  body{margin:0;padding:12px;font:15px system-ui,sans-serif;background:var(--bg);color:var(--tx);max-width:960px;margin-inline:auto}
+  h1{font-size:20px;margin:4px 0 12px} h3{margin:0 0 8px;font-size:13px;color:var(--mu);text-transform:uppercase;letter-spacing:.05em}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:12px}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  label{display:block;font-size:12px;color:var(--mu);margin:6px 0 2px}
+  input,select,button{width:100%;padding:8px;font-size:15px;border-radius:8px;border:1px solid #444;background:#222;color:var(--tx)}
+  button{background:var(--ac);border:0;cursor:pointer} button.sec{background:#333} button.red{background:#b91c1c}
+  .row{display:flex;gap:8px} .row>*{flex:1}
+  #ind{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--bad);margin-right:6px} #ind.on{background:var(--ok)}
+  .big{font-size:28px;font-weight:700} .mu{color:var(--mu)} .ok{color:var(--ok)} .bad{color:var(--bad)}
+  .kv{display:flex;justify-content:space-between;padding:2px 0;font-size:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px} td,th{padding:3px 6px;text-align:left;border-bottom:1px solid #2a2a2e} th{color:var(--mu);font-weight:500}
+  canvas{width:100%;height:140px;display:block}
+</style>
+</head>
+<body>
+<h1><span id="ind"></span>AirDrum · Dashboard</h1>
+
+<div class="card">
+  <h3>Koneksi</h3>
+  <div class="grid">
+    <div><label>PROJECT_ID</label><input id="pid"></div>
+    <div><label>URL broker (WSS)</label><input id="url"></div>
+  </div>
+  <button id="conn" style="margin-top:8px">Sambung</button>
+  <div id="cst" class="mu" style="margin-top:6px;font-size:13px">Belum tersambung.</div>
+</div>
+
+<div class="card">
+  <h3>Kontrol latihan (dikirim ke topic <code>control</code>)</h3>
+  <div class="grid">
+    <div><label>Mode</label><select id="mode"><option value="free">Bebas</option><option value="train">Latihan (ikuti ketukan)</option></select></div>
+    <div><label>BPM (60–140)</label><input id="bpm" type="number" min="60" max="140" step="5" value="90"></div>
+    <div><label>Pola tangan (L/R)</label><input id="pat" value="RLRL"></div>
+    <div><label>Toleransi (ms)</label><input id="tol" type="number" min="20" max="200" step="10" value="80"></div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button id="apply" class="sec">Terapkan</button>
+    <button id="start">Mulai</button>
+    <button id="stop" class="red">Henti</button>
+  </div>
+  <label style="margin-top:10px"><input id="adapt" type="checkbox" checked style="width:auto"> Loop adaptif (≥80% selama 4 bar: +5 BPM · &lt;50%: −5 BPM)</label>
+</div>
+
+<div class="grid">
+  <div class="card"><h3>Stik kiri</h3><div id="dev-left"></div></div>
+  <div class="card"><h3>Stik kanan</h3><div id="dev-right"></div></div>
+  <div class="card"><h3>Skor &amp; latihan</h3><div id="sc"></div></div>
+</div>
+
+<div class="card">
+  <h3>Delta ke ketukan (30 pukulan terakhir) · biru = kiri, oranye = kanan · hijau = zona tepat</h3>
+  <canvas id="cv" width="900" height="140"></canvas>
+</div>
+
+<div class="card">
+  <h3>Pukulan terakhir</h3>
+  <table><thead><tr><th>Stik</th><th>Drum</th><th>Vel</th><th>Δ ms</th><th>Hasil</th><th>Skor</th></tr></thead><tbody id="log"></tbody></table>
+</div>
+<div class="card"><h3>Riwayat bar</h3><div id="bars" class="mu" style="font-size:13px">Belum ada bar selesai.</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/processing.js"></script>
+<script>
+'use strict';
+const P = AirDrumProc, C = AirDrumCfg, $ = (i) => document.getElementById(i);
+const DRUMS = ['snare', 'hihat', 'tom'], ROLES = ['left', 'right'];
+const S = { cli: null, up: false, ctrl: { mode: 'free', running: false, bpm: 90, pattern: 'RLRL', tolerance_ms: 80 },
+  bar: { idx: null, hits: [] }, streak: 0, n: 0, score: 0, last: '-', deltas: [], rows: [], barLog: [], pingId: 0,
+  dev: { left: { state: 'belum ada', n: 0, rtt: null }, right: { state: 'belum ada', n: 0, rtt: null } },
+  counts: { snare: 0, hihat: 0, tom: 0 } };
+const base = () => C.base($('pid').value);
+
+// ---- pengaturan (localStorage) ----
+(function () { let s = {}; try { s = JSON.parse(localStorage.getItem('airdrum_dash') || '{}'); } catch (e) {}
+  $('pid').value = s.pid || C.DEFAULT_PROJECT_ID; $('url').value = s.url || C.DEFAULT_BROKER; })();
+const simpan = () => { try { localStorage.setItem('airdrum_dash', JSON.stringify({ pid: $('pid').value, url: $('url').value })); } catch (e) {} };
+
+// ---- MQTT ----
+function pub(sub, obj, qos, retain) { if (S.cli && S.up) S.cli.publish(base() + '/' + sub, JSON.stringify(obj), { qos, retain: !!retain }); }
+$('conn').onclick = () => {
+  if (S.cli) S.cli.end(true);
+  simpan(); const b = base();
+  $('cst').textContent = 'Menyambung ke ' + $('url').value + ' …';
+  S.cli = mqtt.connect($('url').value, { clientId: 'airdrum_dash_' + Math.random().toString(16).slice(2, 8), reconnectPeriod: 2000 });
+  S.cli.on('connect', () => { S.up = true; $('ind').className = 'on'; $('cst').textContent = 'Tersambung · topic ' + b + '/#';
+    S.cli.subscribe([b + '/edge/+/hit', b + '/edge/+/status', b + '/rtt/pong/+'], { qos: 1 }); });
+  S.cli.on('close', () => { S.up = false; $('ind').className = ''; $('cst').textContent = 'Terputus. Mencoba lagi…'; });
+  S.cli.on('error', (e) => { $('cst').textContent = 'MQTT error: ' + e.message; });
+  S.cli.on('message', (topik, buf) => {
+    let m; try { m = JSON.parse(buf.toString()); } catch (e) { return; }
+    const p = topik.slice(b.length + 1).split('/');
+    if (p[0] === 'edge' && ROLES.includes(p[1])) {
+      if (p[2] === 'hit') onHit(p[1], m);
+      else if (p[2] === 'status') { S.dev[p[1]].state = String(m.state || '?'); render(); }
+    } else if (p[0] === 'rtt' && p[1] === 'pong' && ROLES.includes(p[2]) && typeof m.t_ping === 'number') {
+      S.dev[p[2]].rtt = Date.now() - m.t_ping; render();
+    }
+  });
+};
+setInterval(() => pub('rtt/ping', { id: ++S.pingId, t: Date.now() }, 0), 5000); // ukur RTT tiap 5 detik
+
+// ---- kontrol ----
+function kirimControl(patch) {
+  Object.assign(S.ctrl, patch, { seq: Date.now() }); // seq naik terus, edge mengabaikan yang lama
+  S.bar = { idx: null, hits: [] };
+  pub('control', S.ctrl, 1, true);
+  render();
+}
+function bacaForm() {
+  const pat = $('pat').value.toUpperCase().replace(/[^LR]/g, '') || 'RLRL', bpm = Math.min(140, Math.max(60, +$('bpm').value || 90));
+  $('pat').value = pat; $('bpm').value = bpm;
+  return { mode: $('mode').value, bpm, pattern: pat, tolerance_ms: Math.min(200, Math.max(20, +$('tol').value || 80)) };
+}
+$('apply').onclick = () => { S.streak = 0; kirimControl(bacaForm()); };
+$('start').onclick = () => { S.streak = 0; kirimControl(Object.assign(bacaForm(), { running: true })); };
+$('stop').onclick = () => kirimControl({ running: false });
+
+// ---- pukulan masuk: nilai, kirim feedback, loop adaptif ----
+function onHit(role, m) {
+  const d = S.dev[role]; d.n++; d.state = 'online'; d.drum = DRUMS.includes(m.drum) ? m.drum : '?';
+  d.vel = +m.velocity || 0; d.peak = +m.peak_acc || 0; d.bpm = m.bpm_est;
+  const hand = role === 'left' ? 'L' : 'R', c = S.ctrl;
+  const train = c.mode === 'train' && c.running && m.delta_ms != null && m.beat_index != null;
+  const j = P.judgeHit({ delta_ms: train ? +m.delta_ms : null, hand, expected: train ? P.expectedHand(c.pattern, m.beat_index) : null, tolerance_ms: c.tolerance_ms });
+  pub('feedback/' + role, { result: j.result, delta_ms: j.delta_ms, score: j.score, tip: j.tip }, 1);
+  S.n++; S.score += j.score; S.last = j.result; if (S.counts[d.drum] != null) S.counts[d.drum]++;
+  if (train) {
+    S.deltas.push({ v: +m.delta_ms, hand }); S.deltas = S.deltas.slice(-30);
+    const bi = Math.floor(m.beat_index / 4);
+    if (S.bar.idx !== null && bi > S.bar.idx) tutupBar();
+    if (S.bar.idx === null || bi >= S.bar.idx) { S.bar.idx = bi; S.bar.hits.push({ delta_ms: +m.delta_ms, handOk: j.result !== 'TANGAN SALAH' }); }
+  }
+  S.rows.unshift({ role, drum: d.drum, vel: d.vel, delta: j.delta_ms, result: j.result, score: j.score }); S.rows = S.rows.slice(0, 10);
+  render();
+}
+function tutupBar() {
+  const hits = S.bar.hits, tol = S.ctrl.tolerance_ms;
+  S.bar = { idx: null, hits: [] };
+  if (!hits.length) return;
+  const acc = P.barAccuracy(hits, tol), r = P.adaptBpm({ bpm: S.ctrl.bpm, streak: S.streak }, acc);
+  S.barLog.unshift('Bar: ' + Math.round(acc * 100) + '% (' + hits.length + ' pukulan) · ' + S.ctrl.bpm + ' BPM' + (r.changed && $('adapt').checked ? ' → ' + r.bpm : ''));
+  S.barLog = S.barLog.slice(0, 8);
+  S.streak = r.streak;
+  if (r.changed && $('adapt').checked && r.bpm !== S.ctrl.bpm) { $('bpm').value = r.bpm; kirimControl({ bpm: r.bpm }); }
+}
+
+// ---- tampilan ----
+function kv(el, k, v, cls) { const r = document.createElement('div'); r.className = 'kv'; const a = document.createElement('span'), b = document.createElement('b');
+  a.className = 'mu'; a.textContent = k; b.textContent = v; if (cls) b.className = cls; r.append(a, b); el.append(r); }
+function render() {
+  ROLES.forEach((r) => { const d = S.dev[r], el = $('dev-' + r); el.textContent = '';
+    kv(el, 'Status', d.state, d.state === 'online' ? 'ok' : 'bad'); kv(el, 'Pukulan', d.n);
+    kv(el, 'Drum terakhir', d.drum || '-'); kv(el, 'Velocity', d.vel != null ? d.vel : '-');
+    kv(el, 'Peak acc', d.peak != null ? d.peak.toFixed(1) + ' m/s²' : '-'); kv(el, 'BPM estimasi', d.bpm || '-');
+    kv(el, 'RTT', d.rtt != null ? d.rtt + ' ms' : '-'); });
+  const sc = $('sc'); sc.textContent = '';
+  const big = document.createElement('div'); big.className = 'big'; big.textContent = S.n ? Math.round(S.score / S.n) : '-'; sc.append(big);
+  kv(sc, 'Rata-rata skor', S.n ? (S.score / S.n).toFixed(1) : '-'); kv(sc, 'Total pukulan', S.n); kv(sc, 'Hasil terakhir', S.last);
+  kv(sc, 'Mode', S.ctrl.mode + (S.ctrl.running ? ' · jalan' : ' · berhenti')); kv(sc, 'BPM aktif', S.ctrl.bpm); kv(sc, 'Streak bar ≥80%', S.streak + '/4');
+  kv(sc, 'Snare/Hihat/Tom', DRUMS.map((k) => S.counts[k]).join(' / '));
+  const tb = $('log'); tb.textContent = '';
+  S.rows.forEach((x) => { const tr = document.createElement('tr');
+    [x.role === 'left' ? 'Kiri' : 'Kanan', x.drum, x.vel, x.delta == null ? '-' : x.delta, x.result, x.score].forEach((v, i) => { const td = document.createElement('td'); td.textContent = v; if (i === 4) td.className = x.result === 'TEPAT' ? 'ok' : 'bad'; tr.append(td); });
+    tb.append(tr); });
+  if (S.barLog.length) $('bars').innerHTML = '', S.barLog.forEach((t) => { const d = document.createElement('div'); d.textContent = t; $('bars').append(d); });
+  gambar();
+}
+function gambar() {
+  const c = $('cv'), g = c.getContext('2d'), w = c.width, h = c.height, tol = S.ctrl.tolerance_ms, m = Math.max(150, tol * 1.5);
+  const y = (v) => h / 2 - v / m * (h / 2 - 8);
+  g.clearRect(0, 0, w, h); g.fillStyle = 'rgba(74,222,128,.15)'; g.fillRect(0, y(tol), w, y(-tol) - y(tol));
+  g.strokeStyle = '#555'; g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w, y(0)); g.stroke();
+  S.deltas.forEach((d, i) => { g.fillStyle = d.hand === 'L' ? '#60a5fa' : '#fb923c'; g.beginPath(); g.arc((i + .5) * w / 30, y(Math.max(-m, Math.min(m, d.v))), 5, 0, 7); g.fill(); });
+}
+render();
+</script>
+</body>
+</html>

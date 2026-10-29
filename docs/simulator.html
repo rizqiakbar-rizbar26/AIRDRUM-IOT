@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirDrum · Simulator</title>
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;padding:12px;font:15px system-ui,sans-serif;background:#111;color:#eee;max-width:640px;margin-inline:auto}
+  label{display:block;margin:8px 0 2px;font-size:13px;color:#aaa}
+  input,button{width:100%;padding:9px;font-size:15px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;box-sizing:border-box}
+  button{background:#2563eb;border:0;margin-top:10px} button.red{background:#b91c1c}
+  #ind{display:inline-block;width:12px;height:12px;border-radius:50%;background:#f87171;margin-right:6px} #ind.on{background:#4ade80}
+  pre{font-size:12px;white-space:pre-wrap;background:#1b1b1f;padding:8px;border-radius:8px;min-height:120px}
+  .row{display:flex;gap:8px}.row>*{flex:1}
+</style>
+</head>
+<body>
+<h2><span id="ind"></span>AirDrum · Simulator</h2>
+<p style="color:#aaa;font-size:13px">Meniru dua stik (kiri &amp; kanan) tanpa iPhone: mengikuti <code>control</code> dari dashboard, membalas <code>rtt/ping</code>, dan menerima <code>feedback</code>. Untuk menguji dashboard sebelum alat nyata siap.</p>
+<label>PROJECT_ID</label><input id="pid">
+<label>URL broker (WSS)</label><input id="url">
+<div class="row">
+  <div><label>Jitter waktu (ms, simpangan baku)</label><input id="jit" type="number" value="40" min="0" max="300"></div>
+  <div><label>Peluang tangan salah (%)</label><input id="err" type="number" value="10" min="0" max="100"></div>
+</div>
+<div class="row"><button id="go">Sambung &amp; mulai simulasi</button><button id="stop" class="red">Henti</button></div>
+<pre id="log">Menunggu…</pre>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/processing.js"></script>
+<script>
+'use strict';
+const P = AirDrumProc, C = AirDrumCfg, $ = (i) => document.getElementById(i), ROLES = ['left', 'right'];
+const S = { cli: null, up: false, on: false, gen: 0, t0: Date.now(), seq: { left: 0, right: 0 }, times: { left: [], right: [] },
+  ctrl: { mode: 'free', running: false, bpm: 90, pattern: 'RLRL', tolerance_ms: 80 }, lastSeq: null, lines: [] };
+$('pid').value = C.DEFAULT_PROJECT_ID; $('url').value = C.DEFAULT_BROKER;
+const base = () => C.base($('pid').value);
+const log = (t) => { S.lines.unshift(new Date().toLocaleTimeString() + '  ' + t); S.lines = S.lines.slice(0, 14); $('log').textContent = S.lines.join('\n'); };
+const gauss = () => (Math.random() + Math.random() + Math.random() + Math.random() - 2) * 1.73; // ≈ N(0,1)
+function pub(sub, obj, qos, retain) { if (S.cli && S.up) S.cli.publish(base() + '/' + sub, JSON.stringify(obj), { qos, retain: !!retain }); }
+const status = (state) => ROLES.forEach((r) => pub('edge/' + r + '/status', { device_id: r, state, sensors_ok: true, mode: S.ctrl.mode, bpm: S.ctrl.bpm }, 1, true));
+
+$('go').onclick = () => {
+  if (S.cli) S.cli.end(true);
+  const b = base(); S.on = true;
+  S.cli = mqtt.connect($('url').value, { clientId: 'airdrum_sim_' + Math.random().toString(16).slice(2, 8), reconnectPeriod: 2000 });
+  S.cli.on('connect', () => { S.up = true; $('ind').className = 'on';
+    S.cli.subscribe([b + '/control', b + '/feedback/+', b + '/rtt/ping'], { qos: 1 }); status('online'); log('Tersambung. Simulasi aktif.'); jadwal(); });
+  S.cli.on('close', () => { S.up = false; $('ind').className = ''; });
+  S.cli.on('error', (e) => log('MQTT error: ' + e.message));
+  S.cli.on('message', (topik, buf) => {
+    let m; try { m = JSON.parse(buf.toString()); } catch (e) { return; }
+    if (topik.endsWith('/control')) {
+      if (S.lastSeq != null && m.seq != null && m.seq < S.lastSeq) return;
+      S.lastSeq = m.seq; S.ctrl = Object.assign({}, S.ctrl, m); S.t0 = Date.now(); S.times = { left: [], right: [] };
+      log('Control: ' + S.ctrl.mode + ', ' + S.ctrl.bpm + ' BPM, ' + (S.ctrl.running ? 'jalan' : 'berhenti')); status('online'); jadwal();
+    } else if (topik.endsWith('/rtt/ping')) ROLES.forEach((r) => pub('rtt/pong/' + r, { ping_id: m.id, t_ping: m.t, device_id: r }, 0));
+    else log('Feedback ' + topik.split('/').pop() + ': ' + m.result + ' · skor ' + m.score);
+  });
+};
+$('stop').onclick = () => { S.on = false; S.gen++; status('offline'); log('Simulasi dihentikan.'); if (S.cli) S.cli.end(); S.up = false; $('ind').className = ''; };
+
+// jadwalkan pukulan: mode latihan = tepat ketukan + jitter, mode bebas = acak
+function jadwal() {
+  const gen = ++S.gen; if (!S.on) return;
+  const train = S.ctrl.mode === 'train';
+  if (train && !S.ctrl.running) return;
+  const next = (n) => {
+    if (gen !== S.gen) return;
+    let delay, t;
+    if (train) { const jit = gauss() * (+$('jit').value || 0); t = S.t0 + n * P.beatMs(S.ctrl.bpm) + jit; delay = Math.max(0, t - Date.now()); }
+    else { delay = 400 + Math.random() * 600; t = Date.now() + delay; }
+    setTimeout(() => {
+      if (gen !== S.gen) return;
+      let role = Math.random() < 0.5 ? 'left' : 'right';
+      if (train) { role = P.expectedHand(S.ctrl.pattern, n) === 'L' ? 'left' : 'right';
+        if (Math.random() * 100 < (+$('err').value || 0)) role = role === 'left' ? 'right' : 'left'; }
+      kirim(role, t, train, n); next(n + 1);
+    }, delay);
+  };
+  next(1);
+}
+function kirim(role, t, train, n) {
+  const drum = ['snare', 'hihat', 'tom'][Math.floor(Math.random() * 3)], peak = 14 + Math.random() * 20, vel = P.velocityFromPeak(peak);
+  S.times[role].push(t); S.times[role] = S.times[role].slice(-4); S.seq[role]++;
+  pub('edge/' + role + '/hit', { device_id: role, sequence: S.seq[role], drum, velocity: vel, peak_acc: +peak.toFixed(2),
+    delta_ms: train ? Math.round(P.deltaToBeat(t, S.t0, S.ctrl.bpm)) : null, beat_index: train ? P.beatIndex(t, S.t0, S.ctrl.bpm) : null,
+    bpm_est: P.estimateBpm(S.times[role]), sent_at_ms: Math.round(t) }, 0);
+}
+</script>
+</body>
+</html>
