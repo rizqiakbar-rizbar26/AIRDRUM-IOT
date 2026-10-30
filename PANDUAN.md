@@ -7,20 +7,17 @@
 
 ## A. Persiapan
 1. Unggah isi proyek ke GitHub, aktifkan Pages (`main`, `/docs`).
-2. Tentukan **PROJECT_ID unik** kelompokmu, misalnya `airdrum_kelompok_07`. Pakai yang sama di semua perangkat.
-3. Jalankan `node --test`, harus 13 test lulus.
+2. Tentukan  `airdrum`. Pakai yang sama di semua perangkat.
 
 ## B. Kalibrasi sensor (sekali, tiap iPhone)
-1. Buka `edge.html`, pilih peran, isi PROJECT_ID, tekan **Mulai**, izinkan sensor.
+1. Buka `edge.html`, pilih peran, tekan **Mulai**, izinkan sensor.
 2. Buka **Mode debug**. Catat `magnitude` saat HP diam (harusnya mendekati 0 karena gravitasi dibuang) dan saat memukul.
 3. Atur slider **HIT_ACC** di atas magnitude diam dan getar tangan, tetapi di bawah pukulan lemah. Bawaan 12 m/s². Naikkan bila ada *false hit*, turunkan bila pukulan tidak terdeteksi.
-4. Uji snare (ayun ke bawah), hi-hat (ke samping), tom (memutar). Bila sering salah, buka **Kalibrasi k-NN**, pilih kelas, tekan **Rekam 5 ayunan**, ulangi tiap kelas, lalu pilih klasifikasi **k-NN**.
+4. Uji snare (ayun ke bawah), hi-hat (ke samping), tom (memutar). 
 5. Pengaturan (PROJECT_ID, broker, peran, HIT_ACC) tersimpan otomatis. Data k-NN **tidak** tersimpan, rekam ulang tiap membuka halaman.
 
-Bila `magnitude` di debug selalu 0, iOS memakai `acceleration` null. Kode otomatis beralih ke `accelerationIncludingGravity` (nilai diam ≈ 9,8), jadi naikkan HIT_ACC sekitar 10 dari nilai tadi.
-
 ## C. Sesi latihan
-1. Laptop: buka `dashboard.html`, PROJECT_ID sama, **Sambung**. Kartu stik kiri dan kanan harus berstatus *online*.
+1. Laptop: buka `dashboard.html`, **Sambung**. Kartu stik kiri dan kanan harus berstatus *online*.
 2. **Mode Bebas**: ayunkan stik, suara keluar, dashboard mencatat drum dan velocity.
 3. **Mode Latihan**: pilih BPM, pola (misal `RLRL` = kanan, kiri, kanan, kiri per ketukan), toleransi, lalu **Mulai**. iPhone berbunyi metronom dan layar berkedip.
 4. Pukul tepat ketukan dengan tangan sesuai pola. Layar iPhone: hijau = tepat, merah = meleset atau tangan salah.
@@ -31,29 +28,19 @@ Nilai `delta_ms`: negatif = terlalu cepat, positif = terlambat. Ketukan 0 adalah
 ## D. Tanpa iPhone (simulator)
 Buka `simulator.html` dengan PROJECT_ID yang sama, **Sambung & mulai simulasi**. Atur jitter dan peluang tangan salah untuk menguji penilaian dan loop adaptif di dashboard.
 
-## E. Bukti untuk dokumentasi
-- Tabel magnitude diam vs pukul serta HIT_ACC akhir, stik kiri dan kanan
-- Screenshot MQTTX / web client broker, subscribe `airdrum/<PROJECT_ID>/#`, tampak topic `hit`, `control`, `feedback`
-- Screenshot dashboard (status, skor, grafik delta, riwayat bar)
-- Hasil `node --test`
-- Video demo: kalibrasi singkat, mode bebas, mode latihan sampai BPM berubah
-
 ## Pemecahan masalah
 
 | Gejala | Penyebab / solusi |
 |---|---|
 | Izin sensor ditolak | iOS: tutup tab, buka lagi, tekan Mulai, pilih Izinkan. Atau Pengaturan → Safari → Gerakan & Orientasi. |
 | Sensor tidak ada data | Harus lewat HTTPS (GitHub Pages), bukan file lokal atau HTTP. |
-| Tidak tersambung MQTT | Cek URL `wss://broker.hivemq.com:8884/mqtt`. Jaringan kampus kadang memblokir port 8884, coba hotspot. |
+| Tidak tersambung MQTT | Cek URL `wss://broker.hivemq.com:8884/mqtt`.  |
 | Dashboard tidak melihat stik | PROJECT_ID beda (huruf besar/kecil dan spasi dianggap). Bandingkan topic di MQTTX. |
 | Layar iPhone mati | Wake Lock hanya aktif setelah Mulai. Biarkan Safari di depan. |
 | Tidak ada suara | Pastikan tidak silent mode dan volume naik. Audio baru aktif setelah tap Mulai. |
 | False hit saat diam | Naikkan HIT_ACC. |
 | Pukulan tak terdeteksi | Turunkan HIT_ACC atau ayun lebih tegas. |
-| Tom/hi-hat tertukar | Pakai k-NN, rekam 5 ayunan per kelas dengan gaya yang konsisten. |
 | Selalu TANGAN SALAH | Peran iPhone tertukar atau pola belum sesuai urutan. Cek pola di dashboard. |
 | Tidak ada bar selesai | Mode harus Latihan dan tombol Mulai ditekan. Bar tertutup saat pukulan pertama bar berikutnya masuk. |
 | Getar tidak ada | iOS Safari tidak mendukung getar, diganti warna layar dan bunyi. |
 
-## Pembagian tugas yang disarankan
-1 orang edge dan kalibrasi, 1 orang dashboard dan MQTT, 1 orang pengujian dan video, 1 orang dokumentasi.
