@@ -1,8 +1,7 @@
 # Dokumentasi AirDrum
 
-Kerangka laporan sesuai ketentuan tugas (masalah & ide, arsitektur, sensor, processing & algoritma, cloud, pengujian). Bagian bertanda **[ISI]** diisi dengan hasil ukurmu sendiri. Salin tiap bagian ke slide PPT.
 
-Repo GitHub: **[ISI link repo]** · Demo: **[ISI link Pages]** · Anggota: **[ISI]**
+Repo GitHub: **https://github.com/rizqiakbar-rizbar26/AIRDRUM-IOT** ·  · Anggota: ** 24060125140191	Aryo Bimo Bagaskoro , 24060125140201	Mohammad Rizqi Akbar, 24060125140142	Muhammad Robith Hammada **
 
 ---
 
@@ -25,7 +24,6 @@ Komunikasi dua arah:
 
 Suara dimainkan **lokal di edge** agar tidak terasa lag, sedangkan penilaian dilakukan di dashboard.
 
-Gambar arsitektur: **[ISI diagram 4 kotak]**
 
 ## 3. Sensor
 | Sensor | Sumber | Satuan | Kegunaan |
@@ -37,8 +35,8 @@ Hasil Sensor Playground (`iot.myudak.com`):
 
 | Perangkat | Laju data accelerometer | Laju data gyroscope | Satuan |
 |---|---|---|---|
-| iPhone kiri | **[ISI] Hz** | **[ISI] Hz** | **[ISI]** |
-| iPhone kanan | **[ISI] Hz** | **[ISI] Hz** | **[ISI]** |
+| iPhone kiri | **~60 Hz** | **~60 Hz** | **accelerometer m/s², gyroscope rad/s** |
+| iPhone kanan | **~60 Hz** | **~60 Hz** | **accelerometer m/s², gyroscope rad/s** |
 
 ## 4. Data Processing dan Algoritma
 Tiga jenis pengolahan (minimal 2 diminta):
@@ -63,23 +61,22 @@ RTT diukur dashboard tiap 5 detik lewat `rtt/ping` dan `rtt/pong`. Hasil: stik k
 Screenshot MQTTX / web client (subscribe `airdrum/airdrum_iot/#`): **[ISI]**
 
 ## 6. Pengujian
-**6.1 Unit test.** `node --test`: 13 test lulus. **[ISI screenshot]**
+**6.1 Unit test.** `node --test`: 13 test lulus. **<img width="1050" height="655" alt="image" src="https://github.com/user-attachments/assets/8848d720-2acf-45b0-af92-97e49c3b930f" />
+**
 
 **6.2 Kalibrasi ambang pukulan.**
 
-| Stik | Magnitude diam | Magnitude pukulan lemah | Pukulan keras | HIT_ACC akhir | False hit |
+| Stik | Magnitude diam | Magnitude pukulan lemah | Pukulan keras | HIT_ACC akhir | 
 |---|---|---|---|---|---|
-| Kiri | **[ISI]** | **[ISI]** | **[ISI]** | **[ISI]** | **[ISI]** |
-| Kanan | **[ISI]** | **[ISI]** | **[ISI]** | **[ISI]** | **[ISI]** |
+| Kiri | **0,1** | **6.5** | **25** | **12** | 
+| Kanan | **0,1** | **7** | **24** | **12** | 
 
 **6.3 Akurasi klasifikasi** (20 ayunan per kelas, benar / 20):
 
 | Metode | Snare | Hi-hat | Tom |
 |---|---|---|---|
-| Aturan sumbu | **[ISI]** | **[ISI]** | **[ISI]** |
-| k-NN | **[ISI]** | **[ISI]** | **[ISI]** |
+| Aturan sumbu | **17/20** | **14/20** | **16/20** |
 
-**6.4 Latihan dan loop adaptif.** BPM awal **[ISI]**, perubahan BPM tiap bar **[ISI]**, skor rata-rata **[ISI]**. Simulator dapat dipakai untuk mereproduksi skenario (jitter kecil → BPM naik, jitter besar → BPM turun).
 
 **6.5 Keterbatasan.** iOS Safari tidak mendukung getar (diganti warna layar dan bunyi); laju sensor bergantung perangkat; tab harus tetap terbuka (Wake Lock); jam dua iPhone tidak identik sehingga ketukan 0 ditetapkan saat control diterima, selisihnya sebesar latensi jaringan; broker publik dipakai bersama.
 
@@ -88,9 +85,9 @@ Screenshot MQTTX / web client (subscribe `airdrum/airdrum_iot/#`): **[ISI]**
 |---|---|
 | Ide & orisinalitas (20%) | Bagian 1 |
 | Arsitektur 2 edge, 2 sensor, satu jaringan (15%) | Bagian 2–3 |
-| Processing ≥ 2 jenis & AI (20%) | Bagian 4 (A, B, C, k-NN, loop adaptif) |
+| Processing ≥ 2 jenis & AI (20%) | Bagian 4 (A, B, C, loop adaptif) |
 | Komunikasi ke cloud (15%) | Bagian 5 |
 | Pengujian & demo (15%) | Bagian 6 + video |
-| Dokumentasi (15%) | Dokumen ini + README + PANDUAN |
+| Dokumentasi (15%) | DOKUMENTASI + README + PANDUAN |
 
-Yang dikumpulkan: kode di GitHub (tautan dicantumkan di PPT), PPT dokumentasi, video demo.
+
